@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mafia Turn-Based System</title>
+    <script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-database-compat.js"></script>
+    <style>
+        :root { --primary: #6200ee; --bg: #121212; --card: #1e1e1e; --text: #ffffff; --accent: #ff4081; }
+        body { background: var(--bg); color: var(--text); text-align: center; font-family: sans-serif; padding: 15px; }
+        .box { background: var(--card); padding: 20px; border-radius: 15px; margin: 15px auto; max-width: 400px; border: 1px solid #333; }
+        .announcement-box { background: #2c1a4d; border: 2px solid var(--primary); padding: 15px; border-radius: 10px; margin-bottom: 20px; color: #e0b3ff; }
+        .turn-indicator { background: #ffc107; color: black; padding: 5px 10px; border-radius: 5px; font-weight: bold; margin-bottom: 10px; display: block; }
+        .role-text { font-size: 1.2em; font-weight: bold; padding: 10px 20px; border-radius: 50px; display: inline-block; margin: 10px 0; }
+        .mafia { background: #b00020; } .polisi { background: #007bff; } .dokter { background: #28a745; } .peramal { background: #ffc107; color: black; } .warga { background: #555; }
+        .player-item { display: flex; justify-content: space-between; align-items: center; background: #2a2a2a; padding: 10px; margin: 5px 0; border-radius: 8px; }
+        .btn-pilih { background: var(--accent); color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; }
+        .btn-skip { background: #555; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; margin-top: 10px; }
+        input { padding: 12px; width: 80%; border-radius: 8px; border: none; background: #222; color: white; margin-bottom: 10px; }
+        button#mainBtn { padding: 12px 25px; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <h2>🕵️ Mafia Turn-Based</h2>
+
+    <div id="lobby" class="box">
+        <input type="text" id="inputName" placeholder="Nama kamu...">
+        <button id="mainBtn" onclick="joinGame()">MULAI</button>
+    </div>
+
+    <div id="gameRoom" style="display:none;" class="box">
+        <div id="announcement" class="announcement-box">Menunggu Narator...</div>
+        
+        <div id="turnStatus" class="turn-indicator">GILIRAN: DISKUSI</div>
+
+        <h3 id="displayMyName"></h3>
+        <div id="roleDisplay" class="role-text"></div>
+        
+        <div id="peramalInfo" style="display:none; color: #ffc107; margin-bottom: 10px;">
+            Sisa Terawang: <span id="limitPeramal">3</span>
+        </div>
+
+        <hr border="0" style="border-top:1px solid #444">
+        <div id="playerList"></div>
+        
+        <button id="btnSkipPeramal" class="btn-skip" style="display:none;" onclick="skipPeramal()">SKIP GILIRAN (SIMPAN LIMIT)</button>
+    </div>
+
+    <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyAme9eEMI10CqbZwSW164De7l9aKRLjIKQ",
+            authDomain: "mafia-game-21d71.firebaseapp.com",
+            databaseURL: "https://mafia-game-21d71-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "mafia-game-21d71",
+            storageBucket: "mafia-game-21d71.firebasestorage.app",
+            messagingSenderId: "548278648888",
+            appId: "1:548278648888:web:38d801983fa54057eaa6cd"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+        let myRole = "", myName = "", limitPeramal = 3;
+
+        function joinGame() {
+            myName = document.getElementById('inputName').value.trim();
+            if(!myName) return alert("Isi nama!");
+
+            const roles = ["Mafia", "Polisi", "Dokter", "Peramal", "Warga"];
+            myRole = roles[Math.floor(Math.random() * roles.length)];
+
+            db.ref('players/' + myName).set({ nama: myName, peran: myRole, target: "" }).then(() => {
+                document.getElementById('lobby').style.display = 'none';
+                document.getElementById('gameRoom').style.display = 'block';
+                document.getElementById('displayMyName').innerText = myName;
+                document.getElementById('roleDisplay').innerText = myRole;
+                document.getElementById('roleDisplay').className = "role-text " + myRole.toLowerCase();
+                
+                if(myRole === "Peramal") document.getElementById('peramalInfo').style.display = 'block';
+                
+                listenGame();
+            });
+        }
+
+        function listenGame() {
+            // Dengarkan Pengumuman Cerita
+            db.ref('pengumuman').on('value', s => { if(s.val()) document.getElementById('announcement').innerText = "📣 " + s.val(); });
+
+            // Dengarkan Status Giliran (Paling Penting!)
+            db.ref('status_game').on('value', s => {
+                const turn = s.val() || "Diskusi";
+                const ts = document.getElementById('turnStatus');
+                ts.innerText = "GILIRAN: " + turn.toUpperCase();
+
+                // Logika Tombol Peramal
+                const isPeramalTurn = turn.toLowerCase() === "peramal";
+                document.getElementById('btnSkipPeramal').style.display = (isPeramalTurn && myRole === "Peramal") ? "inline-block" : "none";
+
+                updatePlayerList(turn);
+            });
+        }
+
+        function updatePlayerList(currentTurn) {
+            db.ref('players').on('value', (snapshot) => {
+                const data = snapshot.val();
+                const listDiv = document.getElementById('playerList');
+                listDiv.innerHTML = "";
+
+                for(let p in data) {
+                    const isMe = data[p].nama === myName;
+                    // Syarat muncul tombol: Giliran sesuai Peran & Bukan diri sendiri
+                    let canPick = (currentTurn.toLowerCase() === myRole.toLowerCase()) && !isMe;
+                    
+                    // Tambahan syarat Peramal: limit harus > 0
+                    if(myRole === "Peramal" && limitPeramal <= 0) canPick = false;
+
+                    listDiv.innerHTML += `
+                        <div class="player-item">
+                            <span>👤 ${data[p].nama} ${isMe ? '(Anda)' : ''}</span>
+                            ${canPick ? `<button class="btn-pilih" onclick="pilihOrang('${data[p].nama}')">PILIH</button>` : 
+                            (!isMe && currentTurn !== "Diskusi" ? `<span style="font-size:0.7em; color:gray;">${currentTurn} sedang memilih...</span>` : '')}
+                        </div>`;
+                }
+            });
+        }
+
+        function pilihOrang(target) {
+            if(myRole === "Peramal") {
+                limitPeramal--;
+                document.getElementById('limitPeramal').innerText = limitPeramal;
+                alert("Hasil Terawang: " + target + " adalah " + " (Cek Console Narator)");
+            }
+            alert("Kamu memilih: " + target);
+            db.ref('players/' + myName).update({ target: target });
+        }
+
+        function skipPeramal() {
+            alert("Kamu melewatkan giliran. Limit tetap aman!");
+            db.ref('players/' + myName).update({ target: "SKIP" });
+        }
+    </script>
+</body>
+</html>
